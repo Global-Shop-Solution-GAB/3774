@@ -1,0 +1,144 @@
+Program.Sub.ScreenSU.Start
+Program.Sub.ScreenSU.End
+
+Program.Sub.Preflight.Start
+
+Program.Sub.Preflight.End
+
+Program.Sub.Main.Start
+'Coded by: Melinda Keyes
+'Project Start Date: 8/25/2011
+'Quote: 2672
+'Hooks:
+'  Update Job - 15840
+'  Pre-Process - 15880
+'Notes:
+'  This program will allow the user to enter the cumulative number of pieces completed for a job and will automatically calculate the actual number of pieces completed, updating the job tables table accordingly.
+'
+' This program will require the standard on-line company option "Allow Employees to Enter Pieces" to be turned on.
+' This will enable the Update Job screen (Hook 15840) of the GS Timeclock (program OLG002, screen OLS003).
+' The field (000001) and label (000103) for good pieces will be for and labeled as "Cumulative Pieces".
+' Note: Current entry processes for scrap pieces will remain the same.
+' The user will be able to enter the cumulative number of pieces in that field and click the "Process" button (Hook 15890) which will fire this GAB script.
+' The script will take the cumulative number of pieces and subtract from that the total number of pieces reported thus far and then write the result back to the job header, job in process, and job operations tables accordingly.
+' The pieces reported is the sum of the all the pieces completed for each job detail record for that sequence.
+' If the user attempts to enter a cumulative value less than the current number of reported pieces, an error message will be displayed saying the cumulative value is invalid.
+'
+' Since this program needs to reference job information in the system, its performance will be influenced by the amount of information in the active work order tables.
+' If the data is not being properly maintained/purged to history, the lookup time may be noticable.
+
+F.Intrinsic.Control.SetErrorHandler("Main_Err")
+F.Intrinsic.Control.ClearErrors
+
+V.Local.sError.Declare(String)
+V.Local.sQuery.Declare(String)
+V.Local.sJob.Declare(String)
+V.Local.sSuffix.Declare(String)
+V.Local.sSeq.Declare(String)
+V.Local.iPiecesEntered.Declare(Long)
+V.Local.iPiecesCurrent.Declare(Long)
+V.Local.iPiecesComplete.Declare(Long)
+
+F.Intrinsic.Control.If(V.Caller.Hook,=,15840)
+	V.Passed.000103.Set("Cumulative Pieces")
+	F.Intrinsic.Control.End
+F.Intrinsic.Control.EndIf
+
+F.Intrinsic.Control.If(V.Caller.Hook,=,15880)
+	V.Local.iPiecesEntered.Set(V.Passed.000001)
+	V.Local.sJob.Set(V.Passed.009990)
+	V.Local.sSuffix.Set(V.Passed.009991)
+	V.Local.sSeq.Set(V.Passed.009992)
+
+	F.Intrinsic.String.Concat("SELECT PIECES_GOOD FROM V_JOBS_IN_PROCESS WHERE JOB = '",V.Local.sJob,"' AND SUFFIX = '",V.Local.sSuffix,"' AND SEQUENCE = '",V.Local.sSeq,"'",V.Local.sQuery)
+	F.ODBC.Connection!conX.OpenConnection(V.Ambient.PDSN,V.Ambient.PUser,V.Ambient.PPass)
+	F.ODBC.Connection!conX.OpenRecordsetRW("rstPieces",V.Local.sQuery)
+	F.Intrinsic.Control.If(V.ODBC.conX!rstPieces.EOF,<>,True)
+		F.Intrinsic.Control.DoUntil(V.ODBC.conX!rstPieces.EOF,=,True)
+			F.Intrinsic.Math.Add(V.Local.iPiecesCurrent,V.ODBC.conX!rstPieces.FieldValLong!PIECES_GOOD,V.Local.iPiecesCurrent)
+			F.ODBC.conX!rstPieces.MoveNext
+		F.Intrinsic.Control.Loop
+
+		F.Intrinsic.Control.If(V.Local.iPiecesEntered,<,V.Local.iPiecesCurrent)
+			F.ODBC.conX!rstPieces.Close
+			F.Intrinsic.Control.RaiseError(100001,"The cumulative number of pieces entered is less than pieces reported.")
+		F.Intrinsic.Control.Else
+			F.Intrinsic.Math.Sub(V.Local.iPiecesEntered,V.Local.iPiecesCurrent,V.Local.iPiecesComplete)
+			V.Passed.000001.Set(V.Local.iPiecesComplete)
+		F.Intrinsic.Control.EndIf
+	F.Intrinsic.Control.EndIf
+	F.ODBC.conX!rstPieces.Close
+
+'	F.Intrinsic.UI.Msgbox(V.Local.iPiecesComplete)
+
+	F.Intrinsic.String.Concat("SELECT UNITS_COMPLETE FROM V_JOB_OPERATIONS WHERE JOB = '",V.Local.sJob,"' AND SUFFIX = '",V.Local.sSuffix,"' AND SEQ = '",V.Local.sSeq,"'",V.Local.sQuery)
+	F.ODBC.Connection!conX.OpenRecordsetRW("rstSave",V.Local.sQuery)
+	F.Intrinsic.Control.If(V.ODBC.conX!rstSave.EOF,<>,True)
+		F.ODBC.conX!rstSave.Set!UNITS_COMPLETE(V.Local.iPiecesEntered)
+		F.ODBC.conX!rstSave.Update
+	F.Intrinsic.Control.Else
+		F.Intrinsic.String.Concat("No job record was found in JOB_OPERATIONS with Job: ",V.Local.sJob," Suffix: ",V.Local.sSuffix,"",V.Ambient.NewLine,"Processing changes to this job will be overridden",V.Local.sQuery)
+		F.Intrinsic.UI.Msgbox(V.Local.sQuery)
+		V.Passed.000001.Set("0")
+		F.ODBC.conX!rstSave.Close
+		F.ODBC.Connection!conX.Close
+		F.Intrinsic.Control.End
+	F.Intrinsic.Control.EndIf
+	F.ODBC.conX!rstSave.Close
+
+
+'	F.Intrinsic.String.Concat("SELECT QTY_COMPLETED FROM V_JOB_HEADER WHERE JOB = '",V.Local.sJob,"' AND SUFFIX = '",V.Local.sSuffix,"'",V.Local.sQuery)
+'	F.ODBC.Connection!conX.OpenRecordsetRW("rstSave2",V.Local.sQuery)
+'	F.Intrinsic.Control.If(V.ODBC.conX!rstSave2.EOF,<>,True)
+'		F.ODBC.conX!rstSave2.Set!QTY_COMPLETED(V.Local.iPiecesEntered)
+'		F.ODBC.conX!rstSave2.Update
+'	F.Intrinsic.Control.Else
+'		F.Intrinsic.String.Concat("No job record was found in JOB_HEADER  with Job: ",V.Local.sJob," Suffix: ",V.Local.sSuffix,"",V.Ambient.NewLine,"Processing changes to this job will be overridden",V.Local.sQuery)
+'		F.Intrinsic.UI.Msgbox(V.Local.sQuery)
+'		V.Passed.000001.Set("0")
+'		F.ODBC.conX!rstSave2.Close
+'		F.ODBC.Connection!conX.Close
+'		F.Intrinsic.Control.End
+'	F.Intrinsic.Control.EndIf
+'	F.ODBC.conX!rstSave2.Close
+
+	F.Intrinsic.String.Concat("SELECT PIECES_COMPLTD FROM V_JOB_DETAIL WHERE JOB = '",V.Local.sJob,"' AND SUFFIX = '",V.Local.sSuffix,"' AND SEQ = '",V.Local.sSeq,"'",,V.Local.sQuery)
+	F.ODBC.Connection!conX.OpenRecordsetRW("rstSave3",V.Local.sQuery)
+	F.Intrinsic.Control.If(V.ODBC.conX!rstSave3.EOF,<>,True)
+		F.ODBC.conX!rstSave3.Set!PIECES_COMPLTD(V.Local.iPiecesEntered)
+		F.ODBC.conX!rstSave3.Update
+'	F.Intrinsic.Control.Else
+'		F.Intrinsic.String.Concat("No job record was found in JOB_DETAIL  with Job: ",V.Local.sJob," Suffix: ",V.Local.sSuffix,"",V.Ambient.NewLine,"Processing changes to this job will be overridden",V.Local.sQuery)
+'		F.Intrinsic.UI.Msgbox(V.Local.sQuery)
+'		V.Passed.000001.Set("0")
+'		F.ODBC.conX!rstSave3.Close
+'		F.ODBC.Connection!conX.Close
+'		F.Intrinsic.Control.End
+	F.Intrinsic.Control.EndIf
+	F.ODBC.conX!rstSave3.Close
+
+	F.ODBC.Connection!conX.Close
+	F.Intrinsic.Control.End
+F.Intrinsic.Control.EndIf
+
+F.Intrinsic.Control.ExitSub
+
+F.Intrinsic.Control.Label("Main_Err")
+F.Intrinsic.Control.If(V.Ambient.ErrorNumber,<>,0)
+	Function.Intrinsic.String.Concat("Project: ATG_3774_CMLTV_PIECES.gas",V.Ambient.Newline,V.Ambient.Newline,"Subroutine: ",V.Ambient.CurrentSubroutine,V.Ambient.NewLine,"Error Occurred ",V.Ambient.ErrorNumber," with description ",V.Ambient.ErrorDescription,V.Local.sError)
+	F.Intrinsic.UI.Msgbox(V.Local.sError)
+	V.Passed.000001.Set("0")
+	F.ODBC.Connection!conX.Close
+	F.Intrinsic.Control.End
+Function.Intrinsic.Control.EndIf
+
+Program.Sub.Main.End
+
+Program.Sub.Comments.Start
+${$0$}$ATG_3774_CMLTV_PIECES$}$JCT$}$4/11/2016
+${$1$}$$}$$}$1$}$15880$}$OLS003-PB-PROCESS-PRE-HOOK (On-line GUI)$}$4/11/2016 2:33:04 PM$}$(Program: OLG002; Screen: OLS003)
+
+${$1$}$$}$$}$0$}$15840$}$OLS003-POPULATE-HOOK (On-line GUI)$}$4/11/2016 2:32:38 PM$}$(Program: OLG002; Screen: OLS003)
+
+Program.Sub.Comments.End
+
